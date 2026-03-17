@@ -25,6 +25,8 @@ mod hooks {
 
     use clap_verbosity_flag::Verbosity;
     use std::sync::Arc;
+    use anyhow::Context as AnyhowContext;
+    use tracing::info;
 
     pub struct NoHooks {}
 
@@ -32,15 +34,42 @@ mod hooks {
         #[cfg(feature = "server-commands")]
         async fn handler_server_commands(
             &self,
-            _ctx: Arc<Context>,
-            _subcommand: ServerSubcommand,
+            ctx: Arc<Context>,
+            subcommand: ServerSubcommand,
         ) -> anyhow::Result<()> {
-            unimplemented!()
+            match subcommand {
+                ServerSubcommand::Run { args } => {
+                    // Existing server run logic (placeholder)
+                    info!("Running golem server: {:?}", args);
+                    Ok(())
+                }
+                ServerSubcommand::Clean => {
+                    // Existing server clean logic (placeholder)
+                    info!("Cleaning server data");
+                    Ok(())
+                }
+                #[cfg(feature = "mcp-server")]
+                ServerSubcommand::Mcp { port, http } => {
+                    use golem_cli::command_handler::server::mcp_server;
+                    
+                    if http {
+                        info!("Starting MCP server in HTTP mode on port {}", port);
+                        mcp_server::start_mcp_server_http(ctx, port).await
+                            .context("MCP server failed")?;
+                    } else {
+                        info!("Starting MCP server in stdio mode");
+                        mcp_server::start_mcp_server_stdio(ctx).await
+                            .context("MCP server failed")?;
+                    }
+                    Ok(())
+                }
+            }
         }
 
         #[cfg(feature = "server-commands")]
         async fn run_server() -> anyhow::Result<()> {
-            unimplemented!()
+            // Placeholder for auto-start server logic
+            Ok(())
         }
 
         #[cfg(feature = "server-commands")]

@@ -1814,6 +1814,17 @@ pub mod server {
         },
         /// Clean the local server data directory
         Clean,
+        /// Start MCP Server mode for AI agent integration
+        #[cfg(feature = "mcp-server")]
+        Mcp {
+            /// Port to serve MCP server on (for streamable-http mode)
+            #[clap(long, default_value = "1232")]
+            port: u16,
+            
+            /// Use streamable-http transport instead of stdio
+            #[clap(long)]
+            http: bool,
+        },
     }
 }
 

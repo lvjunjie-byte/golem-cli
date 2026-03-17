@@ -74,6 +74,9 @@ mod profile;
 mod rib_repl;
 mod worker;
 
+#[cfg(feature = "server-commands")]
+mod server;
+
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
 // error which is possibly due to a compiler bug (https://github.com/rust-lang/rust/issues/64552).
