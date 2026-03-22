@@ -13,12 +13,14 @@
 // limitations under the License.
 
 //! MCP Tools definitions for Golem CLI
+//! 
+//! Full implementation with actual CLI command integration
 
 use rust_mcp_sdk::schema::*;
-use rust_mcp_sdk::macros::mcp_tool;
-use serde_json::{Value, Map};
+use serde_json::{Value, json};
 use std::sync::Arc;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use tokio::process::Command as TokioCommand;
 
 use crate::context::Context;
 
@@ -30,22 +32,15 @@ pub struct GolemTools {
 impl GolemTools {
     pub fn new() -> Self {
         let tools = vec![
-            // Component tools
             Tool {
                 name: "component_new".into(),
                 description: Some("Create a new Golem component".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Name of the component"
-                        },
-                        "template": {
-                            "type": "string",
-                            "description": "Template to use (rust, typescript, etc.)",
-                            "default": "rust"
-                        }
+                        "name": {"type": "string", "description": "Name of the component"},
+                        "template": {"type": "string", "description": "Template (rust, typescript, etc.)", "default": "rust"},
+                        "path": {"type": "string", "description": "Output path", "default": "<name>"}
                     },
                     "required": ["name"]
                 }),
@@ -60,15 +55,9 @@ impl GolemTools {
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to the component (default: current directory)"
-                        },
-                        "release": {
-                            "type": "boolean",
-                            "description": "Build in release mode",
-                            "default": false
-                        }
+                        "path": {"type": "string", "description": "Path to component", "default": "."},
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"},
+                        "release": {"type": "boolean", "description": "Release mode", "default": false}
                     }
                 }),
                 icons: vec![],
@@ -82,14 +71,9 @@ impl GolemTools {
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to the component"
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Component name"
-                        }
+                        "path": {"type": "string", "description": "Path to component", "default": "."},
+                        "component_name": {"type": "string", "description": "Component name"},
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"}
                     },
                     "required": ["path"]
                 }),
@@ -98,18 +82,14 @@ impl GolemTools {
                 annotations: None,
                 meta: None,
             },
-            
-            // App tools
             Tool {
                 name: "app_new".into(),
                 description: Some("Create a new Golem application".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Name of the application"
-                        }
+                        "name": {"type": "string", "description": "Application name"},
+                        "path": {"type": "string", "description": "Output path", "default": "<name>"}
                     },
                     "required": ["name"]
                 }),
@@ -120,43 +100,32 @@ impl GolemTools {
             },
             Tool {
                 name: "app_deploy".into(),
-                description: Some("Deploy the current application".into()),
+                description: Some("Deploy a Golem application".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to the application (default: current directory)"
-                        }
-                    }
+                        "path": {"type": "string", "description": "Path to application", "default": "."},
+                        "app_name": {"type": "string", "description": "Application name"},
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"}
+                    },
+                    "required": ["path"]
                 }),
                 icons: vec![],
                 execution: None,
                 annotations: None,
                 meta: None,
             },
-            
-            // Worker tools
             Tool {
                 name: "worker_create".into(),
                 description: Some("Create a new worker for a component".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "component": {
-                            "type": "string",
-                            "description": "Component name or ID"
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Worker name"
-                        },
-                        "memory": {
-                            "type": "integer",
-                            "description": "Memory limit in MB"
-                        }
+                        "worker_name": {"type": "string", "description": "Worker name"},
+                        "component_id": {"type": "string", "description": "Component ID"},
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"}
                     },
-                    "required": ["component"]
+                    "required": ["worker_name", "component_id"]
                 }),
                 icons: vec![],
                 execution: None,
@@ -165,46 +134,30 @@ impl GolemTools {
             },
             Tool {
                 name: "worker_invoke".into(),
-                description: Some("Invoke a worker with arguments".into()),
+                description: Some("Invoke a worker function".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "worker": {
-                            "type": "string",
-                            "description": "Worker name or ID"
-                        },
-                        "function": {
-                            "type": "string",
-                            "description": "Function name to invoke"
-                        },
-                        "arguments": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Function arguments"
-                        }
+                        "worker_name": {"type": "string", "description": "Worker name"},
+                        "function_name": {"type": "string", "description": "Function to invoke"},
+                        "params": {"type": "array", "items": {"type": "string"}, "description": "Function parameters"},
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"}
                     },
-                    "required": ["worker", "function"]
+                    "required": ["worker_name", "function_name"]
                 }),
                 icons: vec![],
                 execution: None,
                 annotations: None,
                 meta: None,
             },
-            
-            // Info tools
             Tool {
                 name: "get_status".into(),
-                description: Some("Get status of Golem resources".into()),
+                description: Some("Get Golem CLI status".into()),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "resource_type": {
-                            "type": "string",
-                            "description": "Type of resource (components, workers, apps)",
-                            "enum": ["components", "workers", "apps"]
-                        }
-                    },
-                    "required": ["resource_type"]
+                        "profile": {"type": "string", "description": "Profile name", "default": "default"}
+                    }
                 }),
                 icons: vec![],
                 execution: None,
@@ -220,159 +173,184 @@ impl GolemTools {
         self.tools.clone()
     }
     
-    pub async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<Value>,
-        ctx: &Arc<Context>,
-    ) -> Result<CallToolResult> {
-        match name {
-            "component_new" => self.component_new(arguments, ctx).await,
-            "component_build" => self.component_build(arguments, ctx).await,
-            "component_deploy" => self.component_deploy(arguments, ctx).await,
-            "app_new" => self.app_new(arguments, ctx).await,
-            "app_deploy" => self.app_deploy(arguments, ctx).await,
-            "worker_create" => self.worker_create(arguments, ctx).await,
-            "worker_invoke" => self.worker_invoke(arguments, ctx).await,
-            "get_status" => self.get_status(arguments, ctx).await,
-            _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
+    pub async fn call_tool(&self, name: &str, arguments: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
+        let result = match name {
+            "component_new" => self.component_new(arguments).await?,
+            "component_build" => self.component_build(arguments).await?,
+            "component_deploy" => self.component_deploy(arguments).await?,
+            "app_new" => self.app_new(arguments).await?,
+            "app_deploy" => self.app_deploy(arguments).await?,
+            "worker_create" => self.worker_create(arguments).await?,
+            "worker_invoke" => self.worker_invoke(arguments).await?,
+            "get_status" => self.get_status(arguments).await?,
+            _ => return Err(anyhow::anyhow!("Unknown tool: {}", name)),
+        };
+        
+        Ok(CallToolResult {
+            content: vec![Content::TextContent(TextContent {
+                r#type: "text".into(),
+                text: result,
+                annotations: None,
+                meta: None,
+            })],
+            is_error: None,
+            meta: None,
+        })
+    }
+    
+    async fn component_new(&self, args: Option<Value>) -> Result<String> {
+        let args = args.context("Missing arguments")?;
+        let name = args.get("name").and_then(|v| v.as_str()).context("name is required")?;
+        let template = args.get("template").and_then(|v| v.as_str()).unwrap_or("rust");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(name);
+        
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("component").arg("new").arg(name)
+            .arg("--template").arg(template)
+            .arg("--path").arg(path);
+        
+        let output = cmd.output().await.context("Failed to execute command")?;
+        
+        if output.status.success() {
+            Ok(format!("✅ Component '{}' created successfully from template '{}'", name, template))
+        } else {
+            Err(anyhow::anyhow!("❌ Component creation failed: {}", String::from_utf8_lossy(&output.stderr)))
         }
     }
     
-    async fn component_new(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let args = args.ok_or_else(|| anyhow::anyhow!("Missing arguments"))?;
-        let name = args.get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?;
+    async fn component_build(&self, args: Option<Value>) -> Result<String> {
+        let path = args.as_ref().and_then(|a| a.get("path")).and_then(|v| v.as_str()).unwrap_or(".");
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
+        let release = args.as_ref().and_then(|a| a.get("release")).and_then(|v| v.as_bool()).unwrap_or(false);
         
-        let template = args.get("template")
-            .and_then(|v| v.as_str())
-            .unwrap_or("rust");
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("component").arg("build")
+            .arg("--path").arg(path)
+            .arg("--profile").arg(profile);
+        if release { cmd.arg("--release"); }
         
-        // TODO: Implement actual component creation
-        let output = format!("Would create component '{}' with template '{}'", name, template);
+        let output = cmd.output().await.context("Failed to execute command")?;
         
-        Ok(CallToolResult::text_content(vec![output]))
+        if output.status.success() {
+            Ok(format!("✅ Component built successfully from '{}'", path))
+        } else {
+            Err(anyhow::anyhow!("❌ Build failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn component_build(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let path = args
-            .as_ref()
-            .and_then(|a| a.get("path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+    async fn component_deploy(&self, args: Option<Value>) -> Result<String> {
+        let path = args.as_ref().and_then(|a| a.get("path")).and_then(|v| v.as_str()).unwrap_or(".");
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
         
-        let release = args
-            .as_ref()
-            .and_then(|a| a.get("release"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("component").arg("deploy")
+            .arg("--path").arg(path)
+            .arg("--profile").arg(profile);
         
-        // TODO: Implement actual build
-        let mode = if release { "release" } else { "debug" };
-        let output = format!("Would build component at '{}' in {} mode", path, mode);
+        let output = cmd.output().await.context("Failed to execute command")?;
         
-        Ok(CallToolResult::text_content(vec![output]))
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(format!("✅ Component deployed successfully from '{}'\n{}", path, stdout))
+        } else {
+            Err(anyhow::anyhow!("❌ Deploy failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn component_deploy(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let path = args
-            .as_ref()
-            .and_then(|a| a.get("path"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
+    async fn app_new(&self, args: Option<Value>) -> Result<String> {
+        let name = args.as_ref().and_then(|a| a.get("name")).and_then(|v| v.as_str()).context("name is required")?;
+        let path = args.as_ref().and_then(|a| a.get("path")).and_then(|v| v.as_str()).unwrap_or(name);
         
-        // TODO: Implement actual deployment
-        let output = format!("Would deploy component from '{}'", path);
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("app").arg("new").arg(name).arg("--path").arg(path);
         
-        Ok(CallToolResult::text_content(vec![output]))
+        let output = cmd.output().await.context("Failed to execute command")?;
+        
+        if output.status.success() {
+            Ok(format!("✅ Application '{}' created successfully", name))
+        } else {
+            Err(anyhow::anyhow!("❌ Application creation failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn app_new(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let name = args
-            .as_ref()
-            .and_then(|a| a.get("name"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?;
+    async fn app_deploy(&self, args: Option<Value>) -> Result<String> {
+        let path = args.as_ref().and_then(|a| a.get("path")).and_then(|v| v.as_str()).unwrap_or(".");
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
         
-        // TODO: Implement actual app creation
-        let output = format!("Would create application '{}'", name);
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("app").arg("deploy")
+            .arg("--path").arg(path)
+            .arg("--profile").arg(profile);
         
-        Ok(CallToolResult::text_content(vec![output]))
+        let output = cmd.output().await.context("Failed to execute command")?;
+        
+        if output.status.success() {
+            Ok(format!("✅ Application deployed successfully from '{}'", path))
+        } else {
+            Err(anyhow::anyhow!("❌ Deploy failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn app_deploy(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let path = args
-            .as_ref()
-            .and_then(|a| a.get("path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+    async fn worker_create(&self, args: Option<Value>) -> Result<String> {
+        let worker_name = args.as_ref().and_then(|a| a.get("worker_name")).and_then(|v| v.as_str()).context("worker_name is required")?;
+        let component_id = args.as_ref().and_then(|a| a.get("component_id")).and_then(|v| v.as_str()).context("component_id is required")?;
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
         
-        // TODO: Implement actual deployment
-        let output = format!("Would deploy application from '{}'", path);
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("worker").arg("create").arg(worker_name)
+            .arg("--component").arg(component_id)
+            .arg("--profile").arg(profile);
         
-        Ok(CallToolResult::text_content(vec![output]))
+        let output = cmd.output().await.context("Failed to execute command")?;
+        
+        if output.status.success() {
+            Ok(format!("✅ Worker '{}' created successfully for component '{}'", worker_name, component_id))
+        } else {
+            Err(anyhow::anyhow!("❌ Worker creation failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn worker_create(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let component = args
-            .as_ref()
-            .and_then(|a| a.get("component"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'component' argument"))?;
+    async fn worker_invoke(&self, args: Option<Value>) -> Result<String> {
+        let worker_name = args.as_ref().and_then(|a| a.get("worker_name")).and_then(|v| v.as_str()).context("worker_name is required")?;
+        let function_name = args.as_ref().and_then(|a| a.get("function_name")).and_then(|v| v.as_str()).context("function_name is required")?;
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
         
-        let name = args
-            .as_ref()
-            .and_then(|a| a.get("name"))
-            .and_then(|v| v.as_str());
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("worker").arg("invoke").arg(worker_name).arg(function_name)
+            .arg("--profile").arg(profile);
         
-        // TODO: Implement actual worker creation
-        let output = match name {
-            Some(n) => format!("Would create worker '{}' for component '{}'", n, component),
-            None => format!("Would create worker for component '{}'", component),
-        };
+        if let Some(params) = args.and_then(|a| a.get("params")).and_then(|v| v.as_array()) {
+            for param in params {
+                if let Some(p) = param.as_str() {
+                    cmd.arg(p);
+                }
+            }
+        }
         
-        Ok(CallToolResult::text_content(vec![output]))
+        let output = cmd.output().await.context("Failed to execute command")?;
+        
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(format!("✅ Worker invoked successfully\n{}", stdout))
+        } else {
+            Err(anyhow::anyhow!("❌ Invocation failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
     
-    async fn worker_invoke(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let worker = args
-            .as_ref()
-            .and_then(|a| a.get("worker"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'worker' argument"))?;
+    async fn get_status(&self, args: Option<Value>) -> Result<String> {
+        let profile = args.as_ref().and_then(|a| a.get("profile")).and_then(|v| v.as_str()).unwrap_or("default");
         
-        let function = args
-            .as_ref()
-            .and_then(|a| a.get("function"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'function' argument"))?;
+        let mut cmd = TokioCommand::new("golem-cli");
+        cmd.arg("diagnose").arg("--profile").arg(profile);
         
-        let arguments = args
-            .as_ref()
-            .and_then(|a| a.get("arguments"))
-            .and_then(|v| v.as_array());
+        let output = cmd.output().await.context("Failed to execute command")?;
         
-        // TODO: Implement actual invocation
-        let output = match arguments {
-            Some(args) => format!("Would invoke '{}.{}' with args: {:?}", worker, function, args),
-            None => format!("Would invoke '{}.{}'", worker, function),
-        };
-        
-        Ok(CallToolResult::text_content(vec![output]))
-    }
-    
-    async fn get_status(&self, args: Option<Value>, _ctx: &Arc<Context>) -> Result<CallToolResult> {
-        let resource_type = args
-            .as_ref()
-            .and_then(|a| a.get("resource_type"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'resource_type' argument"))?;
-        
-        // TODO: Implement actual status check
-        let output = format!("Status for {}: OK (placeholder)", resource_type);
-        
-        Ok(CallToolResult::text_content(vec![output]))
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(format!("📊 Golem CLI Status\n{}", stdout))
+        } else {
+            Err(anyhow::anyhow!("❌ Status check failed: {}", String::from_utf8_lossy(&output.stderr)))
+        }
     }
 }
 
